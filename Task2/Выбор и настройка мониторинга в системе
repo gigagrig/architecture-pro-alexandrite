@@ -1,0 +1,95 @@
+# Выбор и настройка мониторинга в системе
+
+## Мотивация
+
+Яндекс Метрика показывает только поведение части пользователей сайта. Сейчас проблемы возникают ещё в партнёрском API, MES, CRM, RabbitMQ и базах данных. Без мониторинга команда видит жалобы, но не видит причину: заказ потерялся в очереди, долго считалась цена, тормозит БД или упал обработчик.
+
+Мониторинг нужен, чтобы:
+
+- находить проблему до жалобы клиента;
+- видеть, где растёт задержка по заказу;
+- доказывать бизнесу эффект технических изменений;
+- контролировать SLA для B2C и партнёрского API;
+- быстрее разбирать инциденты и не ждать ручной проверки всех систем.
+
+## Выбор подхода к мониторингу
+
+Для пользовательских и партнёрских API использую RED:
+
+- Rate - сколько запросов и заказов приходит;
+- Errors - сколько запросов и операций завершается ошибкой;
+- Duration - сколько занимают запросы, расчёт цены и переходы статусов.
+
+Для инфраструктуры использую USE:
+
+- Utilization - CPU, RAM, диск, соединения с БД, занятость воркеров;
+- Saturation - очереди RabbitMQ, пул соединений, thread pool, backlog расчёта цены;
+- Errors - ошибки БД, nack/redelivery в RabbitMQ, ошибки записи файлов.
+
+Для бизнес-процесса заказа отдельно считаю flow-метрики: сколько заказов в каждом статусе, сколько времени заказ проводит в статусе и сколько заказов зависло дольше нормы.
+
+## Метрики
+
+### Онлайн-магазин и Shop API
+
+- `http_requests_total`: нагрузка по сайту и API. Лейблы: `service`, `method`, `route`, `status`.
+- `http_request_duration_seconds`: p95/p99 задержки. Лейблы: `service`, `route`, `status`.
+- `orders_created_total`: число созданных заказов. Лейблы: `source=b2c|api`, `partner_id` для партнёров.
+- `file_upload_duration_seconds` и `file_upload_errors_total`: проблемы с 3D-файлами. Лейблы: `file_type`, `size_bucket`.
+
+### MES API
+
+- `price_calculation_duration_seconds`: время расчёта цены. Лейблы: `source`, `partner_id`, `polygon_bucket`, `result`.
+- `price_calculation_queue_size`: сколько расчётов ждёт обработки.
+- `price_calculation_queue_age_seconds`: возраст самого старого задания.
+- `mes_dashboard_request_duration_seconds`: скорость первой страницы MES. Лейблы: `status_filter`, `page_size`.
+- `orders_taken_total`: сколько заказов операторы взяли в работу. Лейблы: `operator_id` лучше хешировать.
+
+### CRM API
+
+- `crm_status_changes_total`: переходы статусов. Лейблы: `from_status`, `to_status`, `result`.
+- `orders_approval_duration_seconds`: время от `PRICE_CALCULATED` до `MANUFACTURING_APPROVED`.
+- `manual_close_total`: сколько заказов закрыто вручную, чтобы видеть обходные операции.
+
+### RabbitMQ
+
+- `rabbitmq_queue_messages`: размер очереди. Лейблы: `queue`.
+- `rabbitmq_queue_messages_ready` и `rabbitmq_queue_messages_unacked`: где копится backlog.
+- `rabbitmq_oldest_message_age_seconds`: главный сигнал зависания.
+- `rabbitmq_messages_published_total`, `rabbitmq_messages_ack_total`, `rabbitmq_messages_nack_total`.
+- `rabbitmq_dlq_messages_total`: сообщения в DLQ. Лейблы: `queue`, `reason`.
+
+### Базы данных и хранилище файлов
+
+- CPU, RAM, disk usage, IOPS, connections. Лейблы: `db`, `environment`.
+- `db_slow_queries_total`: медленные запросы, особенно по MES-дашборду.
+- `db_query_duration_seconds`: задержки запросов. Лейблы: `service`, `operation`.
+- `storage_put_errors_total`, `storage_get_errors_total`, `storage_request_duration_seconds`.
+
+### Бизнес-метрики заказа
+
+- `orders_by_status`: количество заказов в каждом статусе.
+- `order_status_duration_seconds`: время в статусе. Лейблы: `status`, `source`, `partner_id`.
+- `stuck_orders_total`: заказы, которые превысили допустимое время в статусе.
+- `order_lead_time_seconds`: полный путь от `SUBMITTED` до `CLOSED`.
+
+## План действий
+
+1. Развернуть Prometheus, Grafana и Alertmanager. Для долгого хранения метрик - VictoriaMetrics или Managed Service for Prometheus, если останемся в Yandex Cloud.
+2. Подключить exporters для EC2, PostgreSQL, RabbitMQ и хранилища.
+3. Инструментировать Java Spring Boot и C# API через Micrometer/OpenTelemetry Metrics.
+4. Добавить бизнес-метрики по заказам и статусам в Shop API, CRM API и MES API.
+5. Собрать дашборды: общий health, партнёрский API, расчёт цены, RabbitMQ, MES-дашборд, путь заказа.
+6. Настроить алерты и runbook: что проверять, кого звать, как повторно обработать сообщение из DLQ.
+7. Добавить проверку метрик в release checklist: новая функциональность должна отдавать базовые метрики.
+
+## Насыщенность и реакции
+
+- CPU API-инстанса выше 75% 15 минут: создать инцидент, проверить релиз и нагрузку; при повторении добавить инстанс.
+- RAM выше 80% 15 минут: проверить утечки, GC и размер файлов; при 90% - срочный инцидент.
+- DB connections выше 80% лимита: проверить пул соединений и slow queries.
+- Disk usage БД выше 80%: тикет DevOps на расширение; выше 90% - срочно.
+- RabbitMQ oldest message age выше 5 минут для обычных событий и выше 30 минут для расчёта цены: алерт команде и проверка потребителей.
+- DLQ больше 0 по заказным событиям: алерт поддержки и разработчиков, разбор причины до конца дня.
+- p95 `price_calculation_duration_seconds` выше 10 минут: включить ограничение приёма тяжёлых моделей или увеличить воркеры.
+- `stuck_orders_total` больше 0 для статусов дольше SLA: создать тикет поддержки с конкретными `order_id`.
