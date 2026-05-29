@@ -57,11 +57,11 @@
 - Grafana для просмотра вместе с метриками;
 - договорённость по обязательным атрибутам spans: `order_id`, `source`, `partner_id`, `status`.
 
-Схема с трейсингом: [jewerly_c4_model_tracing.drawio](../jewerly_c4_model_tracing.drawio)
+Схема с трейсингом: [jewerly_c4_model_tracing.drawio](jewerly_c4_model_tracing.drawio)
 
 Дополнительно можно построить автоматический контроль прохождения заказа. Отдельный Order Flow Monitor читает события/трейсы по заказам, ищет зависшие статусы и отправляет алерты в Alertmanager.
 
-Схема с трейсингом и алертингом: [jewerly_c4_model_tracing_alerting.drawio](../jewerly_c4_model_tracing_alerting.drawio)
+Схема с трейсингом и алертингом: [jewerly_c4_model_tracing_alerting.drawio](jewerly_c4_model_tracing_alerting.drawio)
 
 ## Автоматический контроль процесса заказа
 
